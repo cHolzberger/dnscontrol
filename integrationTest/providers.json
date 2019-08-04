@@ -7,6 +7,10 @@
   "BIND": {
     "domain": "example.com"
   },
+  "COREDNS": {
+    "domain": "example.com"
+  },
+
   "CLOUDFLAREAPI": {
     "apikey": "$CF_KEY",
     "apiuser": "$CF_USER",

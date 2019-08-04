@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -59,12 +60,29 @@ func initcoredns(config map[string]string, providermeta json.RawMessage) (provid
 			return nil, err
 		}
 	}
+
 	api.nameservers = models.StringsToNameservers(api.DefaultNS)
+	return api, nil
+}
+
+func newCoreDNSDomain(conf map[string]string) (providers.Registrar, error) {
+	api := &coredns{}
+	fn := "Corefile"
+	corefile, err := os.Create(fn)
+
+	if err != nil {
+		log.Fatalf("Could not create Corefile: %v", err)
+	} else {
+		api.corefile = corefile
+		fmt.Printf("CREATING COREFILE: %s\n", fn)
+	}
+
 	return api, nil
 }
 
 func init() {
 	providers.RegisterDomainServiceProviderType("COREDNS", initcoredns, features)
+	providers.RegisterRegistrarType("COREDNS", newCoreDNSDomain)
 }
 
 // SoaInfo contains the parts of a SOA rtype.
@@ -88,9 +106,24 @@ type coredns struct {
 	DefaultSoa  SoaInfo  `json:"default_soa"`
 	nameservers []*models.Nameserver
 	directory   string
+	corefile    io.Writer
 }
 
 // var bindSkeletin = flag.String("bind_skeletin", "skeletin/master/var/named/chroot/var/named/master", "")
+func (c *coredns) updateNameserversFunc(dc *models.DomainConfig) func() error {
+	cfs := ""
+	return func() error {
+		cfs = fmt.Sprintf("%s\n%s. {\n file zones/%s.zone \nreload 10s\n } ", cfs, dc.Name, dc.Name)
+		_, err := fmt.Fprintln(c.corefile, cfs)
+		if err != nil {
+			log.Fatalf("WriteZoneFile error: %v\n", err)
+		}
+		if err != nil {
+			log.Fatalf("Closing: %v", err)
+		}
+		return nil
+	}
+}
 
 func rrToRecord(rr dns.RR, origin string, replaceSerial uint32) (models.RecordConfig, uint32) {
 	// Convert's dns.RR into our native data type (models.RecordConfig).
@@ -194,6 +227,16 @@ func makeDefaultSOA(info SoaInfo, origin string) *models.RecordConfig {
 // GetNameservers returns the nameservers for a domain.
 func (c *coredns) GetNameservers(string) ([]*models.Nameserver, error) {
 	return c.nameservers, nil
+}
+
+// GetRegistratCorrections returns a list of domains to create
+func (c *coredns) GetRegistrarCorrections(dc *models.DomainConfig) ([]*models.Correction, error) {
+	return []*models.Correction{
+		{
+			Msg: fmt.Sprintf("Update nameservers %s", dc.Name),
+			F:   c.updateNameserversFunc(dc),
+		},
+	}, nil
 }
 
 // GetDomainCorrections returns a list of corrections to update a domain.
